@@ -6,7 +6,7 @@ That is the point: you will add both, lesson by lesson, in Units 2 and 3.
 """
 
 import sqlite3
-
+from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, g, jsonify, request
 
 DATABASE = "recipes.db"
@@ -127,6 +127,148 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "recipe not found"}), 404
     return "", 204
 
+# POST /users
+# ------------
+# Registration endpoint for creating a new user account.
+#
+# Request (JSON):
+#   {
+#     "username": "<string, required>",
+#     "email": "<string, required>",
+#     "password": "<string, required>"
+#   }
+#
+# Behavior:
+#   - Validates that username, email, and password are present and non-empty.
+#   - Hashes the raw password using Werkzeug (one-way hash).
+#   - Inserts a new row into the users table with username, email, and password_hash.
+#
+# Responses:
+#   - 201 Created:
+#       {
+#         "id": <int>,
+#         "username": "<string>",
+#         "email": "<string>"
+#       }
+#     (never returns the raw password or password hash)
+#
+#   - 400 Bad Request:
+#       {
+#         "error": "invalid_input",
+#         "message": "<what is wrong with the input>"
+#       }
+#
+#   - 409 Conflict:
+#       {
+#         "error": "conflict",
+#         "message": "username or email already exists"
+#       }
+
+
+@app.post("/users")
+def create_user():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "JSON body is required"
+        }), 400
+
+    username = data.get("username", "").strip()
+    email = data.get("email", "").strip()
+    password = data.get("password", "")
+
+    if not username:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "username is required"
+        }), 400
+
+    if not email:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "email is required"
+        }), 400
+
+    if not password:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "password is required"
+        }), 400
+
+    password_hash = generate_password_hash(password)
+
+    db = get_db()
+    try:
+        cur = db.execute(
+            """
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            (username, email, password_hash),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({
+            "error": "conflict",
+            "message": "username or email already exists"
+        }), 409
+
+    row = db.execute(
+        "SELECT id, username, email FROM users WHERE id = ?",
+        (cur.lastrowid,),
+    ).fetchone()
+
+    return jsonify({
+        "id": row["id"],
+        "username": row["username"],
+        "email": row["email"],
+    }), 201
+
+@app.post("/login")
+def login():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "JSON body is required"
+        }), 400
+  
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+
+    if not username or not password:
+        return jsonify({
+            "error": "invalid_input",
+            "message": "username and password are required"
+        }), 400
+   
+    db  = get_db()
+    row = db.execute( 
+        "SELECT id, username, email, password_hash "
+        " FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+
+    
+    # Unknown username OR bad password => same generic 401
+    if (
+        row is None
+        or not check_password_hash(row["password_hash"],
+ password)
+     ):
+        return jsonify({"error": "invalid_credentials"}), 401
+
+    # Success => return authenticated identity (no password/hash)
+    return jsonify({
+        "id": row["id"],
+        "username": row["username"],
+        "email": row["email"],
+    }), 200
+
+ 
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
